@@ -34,6 +34,9 @@ abstract class ManagedVirtualThread<V> extends ManagedThread<V> {
         activate();
         try {
             return task.call();
+        } catch (Throwable cause) {
+            parent.invokeTaskException(task, cause);
+            throw cause;
         } finally {
             deactivate();
         }

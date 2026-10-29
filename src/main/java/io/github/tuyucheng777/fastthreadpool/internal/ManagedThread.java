@@ -93,8 +93,7 @@ public abstract class ManagedThread<T> extends CompletableScheduledFuture<T> imp
         while (thread.isAlive()) {
             try {
                 thread.join();
-            } catch (InterruptedException e) {
-                // Ignore
+            } catch (InterruptedException _) {
             }
         }
     }
@@ -103,7 +102,7 @@ public abstract class ManagedThread<T> extends CompletableScheduledFuture<T> imp
     public final boolean cancel(boolean mayInterruptIfRunning) {
         final boolean cancelled = super.cancel(false);
         if (mayInterruptIfRunning) {
-            // Even if this thread was cancelled by a previous shutdown() without interruption,
+            // Even if this thread was canceled by a previous shutdown() without interruption,
             // shutdownNow() must still interrupt the task it is running.
             interrupt();
         }

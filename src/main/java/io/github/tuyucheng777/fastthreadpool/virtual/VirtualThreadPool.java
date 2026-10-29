@@ -19,10 +19,13 @@ import io.github.tuyucheng777.fastthreadpool.handler.TaskExceptionHandler;
 import io.github.tuyucheng777.fastthreadpool.ThreadPool;
 import io.github.tuyucheng777.fastthreadpool.ThreadPoolMetrics;
 import io.github.tuyucheng777.fastthreadpool.CompletableScheduledFuture;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static io.github.tuyucheng777.fastthreadpool.internal.ThreadPoolUtil.validateDelay;
 import static io.github.tuyucheng777.fastthreadpool.internal.ThreadPoolUtil.validatePeriod;
 import static io.github.tuyucheng777.fastthreadpool.internal.ThreadPoolUtil.handleLateSubmission;
+import static io.github.tuyucheng777.fastthreadpool.internal.ThreadPoolUtil.invokeExceptionHandler;
 import static java.util.Objects.requireNonNull;
 
 /// A [ThreadPool] that starts a virtual thread for every task.
@@ -31,6 +34,8 @@ import static java.util.Objects.requireNonNull;
 /// [TimeUnit#sleep(long)], which is cheap because virtual threads are unmounted while sleeping.
 /// Metrics are not supported yet, so [ThreadPool#metrics()] returns `null`.
 public final class VirtualThreadPool extends AbstractThreadPool {
+
+    private static final Logger logger = LoggerFactory.getLogger(VirtualThreadPool.class);
 
     static final ThreadFactory threadFactory = Thread.ofVirtual().factory();
 
@@ -159,6 +164,15 @@ public final class VirtualThreadPool extends AbstractThreadPool {
 
     void removeActiveTask(ManagedVirtualThread<?> task) {
         activeTasks.remove(task);
+    }
+
+    void invokeTaskException(Callable<?> task, Throwable cause) {
+        try {
+            exceptionHandler.handleTaskException(task, cause, this);
+        } catch (Throwable handlerCause) {
+            handlerCause.addSuppressed(cause);
+            logger.warn("Unexpected exception from a task exception handler:", handlerCause);
+        }
     }
 
     @Nullable

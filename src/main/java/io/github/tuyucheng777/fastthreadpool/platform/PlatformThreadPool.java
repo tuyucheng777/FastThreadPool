@@ -150,7 +150,7 @@ public final class PlatformThreadPool extends AbstractThreadPool {
                                 .register(meterRegistry);
 
                 busyScheduledWorkerCount =
-                        Gauge.builder(metricPrefix + ".busy.workers", workers::numBusyWorkers)
+                        Gauge.builder(metricPrefix + ".busy.workers", scheduledWorkers::numBusyWorkers)
                                 .tags(metricTags)
                                 .tag("scheduled", "true")
                                 .register(meterRegistry);
@@ -235,6 +235,13 @@ public final class PlatformThreadPool extends AbstractThreadPool {
     public List<Runnable> shutdownNow() {
         doShutdown(true, null);
 
+        // The scheduler is not part of the managed threads that TerminationWaiter joins,
+        // so we must interrupt and wait for it explicitly here.
+        if (scheduler.isStarted()) {
+            scheduler.interrupt();
+            scheduler.joinThread();
+        }
+
         final int taskQueueSize;
         if (workers == scheduledWorkers) {
             taskQueueSize = workers.taskQueueSize();
@@ -271,6 +278,10 @@ public final class PlatformThreadPool extends AbstractThreadPool {
         workers.sendPoisonPills();
         if (workers != scheduledWorkers) {
             scheduledWorkers.sendPoisonPills();
+        }
+        // Wake up the scheduler so it can react to pool shutdown.
+        if (scheduler.isStarted()) {
+            scheduler.wakeUp();
         }
     }
 
@@ -400,6 +411,10 @@ public final class PlatformThreadPool extends AbstractThreadPool {
                 for (; ; ) {
                     first = queue[0];
                     if (first == null) {
+                        if (isShutdown()) {
+                            // The pool was shut down while the scheduler was waiting.
+                            return null;
+                        }
                         logger.trace("Waiting for a scheduled task.");
                         condition.await();
                         continue;
@@ -411,6 +426,11 @@ public final class PlatformThreadPool extends AbstractThreadPool {
                         logger.trace("Waiting {} ns for the next scheduled task.", delayNanos);
                         final long nextDelayNanos = condition.awaitNanos(delayNanos);
                         if (nextDelayNanos > 0) {
+                            if (isShutdown()) {
+                                // The pool was shut down while waiting for the task deadline.
+                                // Return the task anyway so it can be cancelled, then exit on the next iteration.
+                                break;
+                            }
                             // Need to wait a little bit more.
                             continue;
                         }
@@ -427,6 +447,18 @@ public final class PlatformThreadPool extends AbstractThreadPool {
                 }
 
                 return first;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        /**
+         * Wakes up the scheduler thread so it can react to pool shutdown.
+         */
+        void wakeUp() {
+            lock.lock();
+            try {
+                condition.signal();
             } finally {
                 lock.unlock();
             }
@@ -537,6 +569,11 @@ public final class PlatformThreadPool extends AbstractThreadPool {
                         } else {
                             continue;
                         }
+                    }
+
+                    if (task == null) {
+                        // The pool was shut down and the queue is empty.
+                        break;
                     }
 
                     logger.trace("Handing a scheduled task over to the workers.");
